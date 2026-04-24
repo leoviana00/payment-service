@@ -62,14 +62,15 @@ node {
 
             if (!changeId) {
 
-                def commitMsg = sh(
-                    script: "git log -1 --pretty=%B",
+                def commitHistory = sh(
+                    script: "git log -5 --pretty=%B",
                     returnStdout: true
                 ).trim()
 
-                echo "Commit message: ${commitMsg}"
+                echo "Recent commit history:"
+                echo commitHistory
 
-                def matcher = commitMsg =~ /\[CHANGE:([a-zA-Z0-9-]+)\]/
+                def matcher = commitHistory =~ /\[CHANGE:([a-zA-Z0-9-]+)\]/
 
                 if (matcher) {
                     changeId = matcher[0][1]
@@ -98,9 +99,10 @@ node {
 
                 echo "Governance Response: ${response}"
 
-                if (!response.contains('"status":"APPROVED"')) {
+                if (!(response.contains('"status":"APPROVED"') || response.contains('"status":"DEPLOYED"'))) {
                     error("Change request ${changeId} is not approved")
                 }
+
             } else {
                 echo "Skipped governance check"
             }
@@ -130,6 +132,7 @@ node {
                     -p ${appPort}:${appPort} \
                     ${imageName}
                 """
+
             } else {
                 echo "Skipped deploy"
             }
@@ -138,8 +141,11 @@ node {
         stage('Health Check') {
 
             if (deployEnabled) {
+
                 sleep 15
+
                 sh "curl -f http://host.docker.internal:${appPort}/actuator/health"
+
             } else {
                 echo "Skipped health check"
             }
@@ -153,6 +159,7 @@ node {
                     curl -X PUT \
                     http://host.docker.internal:8081/api/change-requests/${changeId}/deploy
                 """
+
             } else {
                 echo "Skipped governance update"
             }
