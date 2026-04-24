@@ -10,14 +10,16 @@ properties([
 
 node {
 
-    def appName       = ''
-    def appPort       = ''
-    def imageTag      = params.IMAGE_TAG ?: 'latest'
-    def containerName = ''
-    def imageName     = ''
-    def version       = ''
-    def changeId      = params.CHANGE_ID?.trim()
-    def deployEnabled = false
+    def appName          = ''
+    def appPort          = ''
+    def imageTag         = params.IMAGE_TAG ?: 'latest'
+    def containerName    = ''
+    def imageName        = ''
+    def version          = ''
+    def changeId         = params.CHANGE_ID?.trim()
+    def deployEnabled    = false
+    def alreadyDeployed  = false
+    def governanceStatus = ''
 
     try {
 
@@ -99,7 +101,12 @@ node {
 
                 echo "Governance Response: ${response}"
 
-                if (!(response.contains('"status":"APPROVED"') || response.contains('"status":"DEPLOYED"'))) {
+                if (response.contains('"status":"APPROVED"')) {
+                    governanceStatus = 'APPROVED'
+                } else if (response.contains('"status":"DEPLOYED"')) {
+                    governanceStatus = 'DEPLOYED'
+                    alreadyDeployed = true
+                } else {
                     error("Change request ${changeId} is not approved")
                 }
 
@@ -153,7 +160,7 @@ node {
 
         stage('Update Governance Status') {
 
-            if (deployEnabled) {
+            if (deployEnabled && !alreadyDeployed) {
 
                 sh """
                     curl -X PUT \
@@ -176,6 +183,8 @@ node {
   "port": "${appPort}",
   "changeId": "${changeId}",
   "deployEnabled": "${deployEnabled}",
+  "alreadyDeployed": "${alreadyDeployed}",
+  "governanceStatus": "${governanceStatus}",
   "buildNumber": "${env.BUILD_NUMBER}",
   "status": "SUCCESS",
   "executedBy": "Jenkins"
