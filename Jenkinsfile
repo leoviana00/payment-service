@@ -1,6 +1,6 @@
 properties([
     parameters([
-        string(name: 'CHANGE_ID', defaultValue: '', description: 'ID da mudança aprovada'),
+        string(name: 'CHANGE_ID', defaultValue: '', description: 'ID da mudança (opcional)'),
         string(name: 'APP_NAME', defaultValue: '', description: 'Nome da aplicação (opcional)'),
         string(name: 'APP_PORT', defaultValue: '', description: 'Porta da aplicação (opcional)'),
         string(name: 'IMAGE_TAG', defaultValue: 'latest', description: 'Tag da imagem Docker'),
@@ -17,6 +17,7 @@ node {
     def imageName     = ''
     def version       = ''
     def changeId      = params.CHANGE_ID?.trim()
+    def deployEnabled = false
 
     try {
 
@@ -48,7 +49,6 @@ node {
             appName = params.APP_NAME?.trim() ? params.APP_NAME.trim() : pomAppName
             appPort = params.APP_PORT?.trim() ? params.APP_PORT.trim() : yamlPort
             containerName = params.CONTAINER_NAME?.trim() ? params.CONTAINER_NAME.trim() : appName
-
             imageName = "${appName}:${imageTag}"
 
             echo "APP_NAME       : ${appName}"
@@ -56,29 +56,53 @@ node {
             echo "APP_PORT       : ${appPort}"
             echo "CONTAINER_NAME : ${containerName}"
             echo "IMAGE_NAME     : ${imageName}"
-            echo "CHANGE_ID      : ${changeId}"
         }
 
-        stage('Validate Parameters') {
+        stage('Resolve CHANGE_ID') {
 
             if (!changeId) {
-                error("CHANGE_ID is required")
+
+                def commitMsg = sh(
+                    script: "git log -1 --pretty=%B",
+                    returnStdout: true
+                ).trim()
+
+                echo "Commit message: ${commitMsg}"
+
+                def matcher = commitMsg =~ /\[CHANGE:([a-zA-Z0-9-]+)\]/
+
+                if (matcher) {
+                    changeId = matcher[0][1]
+                    echo "Detected CHANGE_ID: ${changeId}"
+                }
+            }
+
+            if (changeId) {
+                deployEnabled = true
+                echo "Governed deploy mode enabled"
+            } else {
+                echo "No CHANGE_ID found. CI mode only."
             }
         }
 
         stage('Governance Check') {
 
-            def response = sh(
-                script: """
-                    curl -s http://host.docker.internal:8081/api/change-requests/${changeId}
-                """,
-                returnStdout: true
-            ).trim()
+            if (deployEnabled) {
 
-            echo "Governance Response: ${response}"
+                def response = sh(
+                    script: """
+                        curl -s http://host.docker.internal:8081/api/change-requests/${changeId}
+                    """,
+                    returnStdout: true
+                ).trim()
 
-            if (!response.contains('"status":"APPROVED"')) {
-                error("Change request ${changeId} is not approved")
+                echo "Governance Response: ${response}"
+
+                if (!response.contains('"status":"APPROVED"')) {
+                    error("Change request ${changeId} is not approved")
+                }
+            } else {
+                echo "Skipped governance check"
             }
         }
 
@@ -94,30 +118,44 @@ node {
             sh "docker build -t ${imageName} ."
         }
 
-        stage('Stop Old Container') {
-            sh "docker rm -f ${containerName} || true"
-        }
-
         stage('Deploy Container') {
-            sh """
-                docker run -d \
-                --name ${containerName} \
-                -p ${appPort}:${appPort} \
-                ${imageName}
-            """
+
+            if (deployEnabled) {
+
+                sh "docker rm -f ${containerName} || true"
+
+                sh """
+                    docker run -d \
+                    --name ${containerName} \
+                    -p ${appPort}:${appPort} \
+                    ${imageName}
+                """
+            } else {
+                echo "Skipped deploy"
+            }
         }
 
         stage('Health Check') {
-            sleep 15
-            sh "curl -f http://host.docker.internal:${appPort}/actuator/health"
+
+            if (deployEnabled) {
+                sleep 15
+                sh "curl -f http://host.docker.internal:${appPort}/actuator/health"
+            } else {
+                echo "Skipped health check"
+            }
         }
 
         stage('Update Governance Status') {
 
-            sh """
-                curl -X PUT \
-                http://host.docker.internal:8081/api/change-requests/${changeId}/deploy
-            """
+            if (deployEnabled) {
+
+                sh """
+                    curl -X PUT \
+                    http://host.docker.internal:8081/api/change-requests/${changeId}/deploy
+                """
+            } else {
+                echo "Skipped governance update"
+            }
         }
 
         stage('Generate Evidence') {
@@ -130,6 +168,7 @@ node {
   "container": "${containerName}",
   "port": "${appPort}",
   "changeId": "${changeId}",
+  "deployEnabled": "${deployEnabled}",
   "buildNumber": "${env.BUILD_NUMBER}",
   "status": "SUCCESS",
   "executedBy": "Jenkins"
