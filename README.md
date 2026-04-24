@@ -1,5 +1,7 @@
 # Payment Service
 
+![CI](https://github.com/leoviana00/payment-service/actions/workflows/ci.yml/badge.svg)
+
 Microserviço de pagamentos desenvolvido em Spring Boot como parte do ecossistema **DevOps Governance Platform**.
 
 Este projeto representa uma aplicação de negócio real utilizada como alvo de build, testes, deploy automatizado e validações operacionais em pipelines CI/CD.
